@@ -1,0 +1,185 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:context="http://www.springframework.org/schema/context" xmlns:json="http://www.mulesoft.org/schema/mule/json" xmlns:validation="http://www.mulesoft.org/schema/mule/validation" xmlns:dw="http://www.mulesoft.org/schema/mule/ee/dw" xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:apikit="http://www.mulesoft.org/schema/mule/apikit" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:spring="http://www.springframework.org/schema/beans" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/apikit http://www.mulesoft.org/schema/mule/apikit/current/mule-apikit.xsd
+http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-3.1.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/ee/dw http://www.mulesoft.org/schema/mule/ee/dw/current/dw.xsd
+http://www.mulesoft.org/schema/mule/validation http://www.mulesoft.org/schema/mule/validation/current/mule-validation.xsd
+http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd
+http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context-current.xsd">
+    <http:listener-config name="api-httpListenerConfig" host="0.0.0.0" port="8083" doc:name="HTTP Listener Configuration"/>
+    
+    <apikit:config name="api-config" raml="api.raml" consoleEnabled="false" doc:name="Router"/>
+    
+    <db:derby-config name="Derby_Configuration" url="jdbc:derby:memory:muleEmbeddedDB;create=true" doc:name="Derby Configuration"/>
+    
+    <spring:beans>
+        <spring:bean id="Bean" name="Bean" class="com.deloitte.productapi.beans.DerbyInitializer"/>
+    </spring:beans>
+    
+    <configuration doc:name="Configuration">
+    	<expression-language>
+    		<import class="com.deloitte.mulesoft.helperclasses.CustomExceptionHelper"></import>
+    	</expression-language>
+    </configuration>
+    <context:property-placeholder location="product_system_api-${mule.env}.properties"/>
+    
+    <flow name="api-main">
+        <http:listener config-ref="api-httpListenerConfig" path="/product-api/*" doc:name="HTTP"/>
+        <apikit:router config-ref="api-config" doc:name="APIkit Router"/>
+        <exception-strategy ref="api-apiKitGlobalExceptionMapping" doc:name="Reference Exception Strategy"/>
+    </flow>
+    
+    <flow name="api-console">
+        <http:listener config-ref="api-httpListenerConfig" path="/console/*" doc:name="HTTP"/>
+        <apikit:console config-ref="api-config" doc:name="APIkit Console"/>
+    </flow>
+    
+    <flow name="get:/products:api-config">
+        <logger message="${logging.flowStartMessage}" level="INFO" doc:name="Log Flow Start"/>
+        <set-variable variableName="region" value="#[message.inboundProperties.'http.query.params'.region or '%']" doc:name="Set Region"/>
+        <set-variable variableName="priceLessThan" value="#[message.inboundProperties.'http.query.params'.priceLessThan or 1000000000]" doc:name="Set &quot;Price Less Than&quot;"/>
+        <set-variable variableName="priceGreaterThan" value="#[message.inboundProperties.'http.query.params'.priceGreaterThan or 0]" doc:name="Set &quot;Price Greater Than&quot;"/>
+        <choice doc:name="Choice">
+            <when expression="#[message.inboundProperties.'http.query.params'.IDs == empty]">
+                <db:select config-ref="Derby_Configuration" doc:name="Get Products from DB without IDs">
+                    <db:dynamic-query><![CDATA[select p.id product_id, p.name product_name, p.description product_description, r.name_en region_name, pr.price product_price from product p inner join price pr on p.id = pr.product_id inner join region r on pr.region_id = r.id
+where r.name_en like '#[flowVars.region]'
+and pr.price > #[flowVars.priceGreaterThan]
+and pr.price < #[flowVars.priceLessThan]]]></db:dynamic-query>
+                </db:select>
+            </when>
+            <otherwise>
+                <db:select config-ref="Derby_Configuration" doc:name="Get Products from DB with IDs">
+                    <db:dynamic-query><![CDATA[select p.id product_id, p.name product_name, p.description product_description, r.name_en region_name, pr.price product_price from product p inner join price pr on p.id = pr.product_id inner join region r on pr.region_id = r.id
+where r.name_en like '#[flowVars.region]'
+and pr.price > #[flowVars.priceGreaterThan]
+and pr.price < #[flowVars.priceLessThan]
+and p.id in (#[message.inboundProperties.'http.query.params'.IDs])]]></db:dynamic-query>
+                </db:select>
+            </otherwise>
+        </choice>
+        <validation:is-not-empty message="No products found with these parameters" exceptionClass="com.deloitte.productapi.exceptions.NoProductsFoundException" value="#[payload]" doc:name="Validate Product(s) Found"/>
+        <dw:transform-message doc:name="Transform Message">
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/java
+---
+{
+	products: payload map {
+		ID: $.product_id,
+		name: $.product_name,
+		desc: $.product_description,
+		region: $.region_name,
+		price: $.product_price
+	} as :object {class: "com.deloitte.productapi.cdm.Product"}
+} as :object {class: "com.deloitte.productapi.cdm.Products"}]]></dw:set-payload>
+        </dw:transform-message>
+        <logger message="${logging.flowEndMessage}" level="INFO" doc:name="Log Flow Complete"/>
+
+    </flow>
+    <flow name="post:/products:api-config">
+        <logger message="${logging.flowStartMessage}" level="INFO" doc:name="Log Flow Start"/>
+        <json:json-to-object-transformer returnClass="com.deloitte.productapi.cdm.Product" doc:name="Convert JSON to CDM"/>
+        <flow-ref name="insert_product_in_DB" doc:name="insert_product_in_DB"/>
+        <logger message="${logging.flowEndMessage}" level="INFO" doc:name="Log Flow Complete"/>
+    </flow>
+    <sub-flow name="insert_product_in_DB">
+        <set-variable variableName="newProduct" value="#[payload]" doc:name="Set Product Variable"/>
+        <db:select config-ref="Derby_Configuration" doc:name="Get MAX ID">
+            <db:parameterized-query><![CDATA[select max(id) from product]]></db:parameterized-query>
+        </db:select>
+        <set-variable variableName="newProductID" value="#[Integer.parseInt(payload[0].1) + 1]" doc:name="Set New ID"/>
+        <db:insert config-ref="Derby_Configuration" doc:name="Insert New Product">
+            <db:parameterized-query><![CDATA[insert into PRODUCT (ID, NAME, DESCRIPTION) VALUES (#[flowVars.'newProductID'], #[flowVars.'newProduct'.name], #[flowVars.'newProduct'.desc])]]></db:parameterized-query>
+        </db:insert>
+        <expression-component doc:name="Set ID for Returned Product"><![CDATA[flowVars.'newProduct'.setID(flowVars.'newProductID');]]></expression-component>
+        <set-payload value="#[flowVars.'newProduct']" doc:name="Set Payload"/>
+    </sub-flow>
+    <flow name="get:/products/{ID}:api-config">
+        <logger message="${logging.flowStartMessage}" level="INFO" doc:name="Log Flow Start"/>
+        <db:select config-ref="Derby_Configuration" doc:name="Database">
+            <db:parameterized-query><![CDATA[select p.id product_id, p.name product_name, p.description product_description, r.name_en region_name, pr.price product_price from product p inner join price pr on p.id = pr.product_id inner join region r on pr.region_id = r.id
+where p.id = #[flowVars.ID]]]></db:parameterized-query>
+        </db:select>
+        <validation:is-not-empty message="No products found with this ID" exceptionClass="com.deloitte.productapi.exceptions.NoProductsFoundException" value="#[payload]" doc:name="Validation"/>
+        <dw:transform-message doc:name="Transform Message">
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/java
+---
+{
+	products: payload map {
+		ID: $.product_id,
+		name: $.product_name,
+		desc: $.product_description,
+		region: $.region_name,
+		price: $.product_price
+	} as :object {class: "com.deloitte.productapi.cdm.Product"}
+} as :object {class: "com.deloitte.productapi.cdm.Products"}]]></dw:set-payload>
+        </dw:transform-message>
+        <logger message="${logging.flowEndMessage}" level="INFO" doc:name="Log Flow Complete"/>
+    </flow>
+    
+    <flow name="get:/products/{ID}/{region}:api-config">
+        <logger message="${logging.flowStartMessage}" level="INFO" doc:name="Log Flow Start"/>
+        <db:select config-ref="Derby_Configuration" doc:name="Database">
+            <db:parameterized-query><![CDATA[select p.id product_id, p.name product_name, p.description product_description, r.name_en region_name, pr.price product_price from product p inner join price pr on p.id = pr.product_id inner join region r on pr.region_id = r.id
+where p.id = #[flowVars.ID]
+and r.name_en = #[flowVars.region]]]></db:parameterized-query>
+        </db:select>
+        <validation:is-not-empty message="Product not found" exceptionClass="com.deloitte.productapi.exceptions.ProductNotFoundException" value="#[payload]" doc:name="Validate Product Found"/>
+        <dw:transform-message doc:name="Transform Message">
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/java
+---
+{
+	ID: payload[0].product_id,
+	name: payload[0].product_name,
+	desc: payload[0].product_description,
+	region: payload[0].region_name,
+	price: payload[0].product_price
+} as :object {class: "com.deloitte.productapi.cdm.Product"}]]></dw:set-payload>
+        </dw:transform-message>
+        <logger message="${logging.flowEndMessage}" level="INFO" doc:name="Log Flow Complete"/>
+
+    </flow>
+
+    
+    <apikit:mapping-exception-strategy name="api-apiKitGlobalExceptionMapping">
+        <apikit:mapping statusCode="404">
+            <apikit:exception value="org.mule.module.apikit.exception.NotFoundException" />
+            <apikit:exception value="com.deloitte.productapi.exceptions.ProductNotFoundException"/>
+            <apikit:exception value="com.deloitte.productapi.exceptions.NoProductsFoundException"/>
+            <flow-ref name="set-error-values" doc:name="set-error-values"/>
+
+        </apikit:mapping>
+        <apikit:mapping statusCode="405">
+            <apikit:exception value="org.mule.module.apikit.exception.MethodNotAllowedException" />
+            <flow-ref name="set-error-values" doc:name="set-error-values"/>
+        </apikit:mapping>
+        <apikit:mapping statusCode="415">
+            <apikit:exception value="org.mule.module.apikit.exception.UnsupportedMediaTypeException" />
+            <flow-ref name="set-error-values" doc:name="set-error-values"/>
+        </apikit:mapping>
+        <apikit:mapping statusCode="406">
+            <apikit:exception value="org.mule.module.apikit.exception.NotAcceptableException" />
+            <flow-ref name="set-error-values" doc:name="set-error-values"/>
+        </apikit:mapping>
+        <apikit:mapping statusCode="400">
+            <apikit:exception value="org.mule.module.apikit.exception.BadRequestException" />
+            <flow-ref name="set-error-values" doc:name="set-error-values"/>
+        </apikit:mapping>
+        <apikit:mapping statusCode="500">
+        	<apikit:exception value="java.sql.SQLException" />
+        	<flow-ref name="set-error-values" doc:name="set-error-values"/>
+        </apikit:mapping>
+    </apikit:mapping-exception-strategy>
+    <sub-flow name="set-error-values">
+        <set-property doc:name="Set Content-Type" propertyName="Content-Type" value="application/json"/>
+        <set-variable doc:name="Set Error Description" value="#[CustomExceptionHelper.escapeStringForJSON(exception.getMessage())]" variableName="errorDescription"/>
+        <set-variable doc:name="Set Error Code" value="#[CustomExceptionHelper.getErrorCode(exception.cause.class)]" variableName="errorCode"/>
+        <set-payload doc:name="Set Payload" value="{  &quot;errorCode&quot;: #[flowVars.errorCode],  &quot;message&quot;: &quot;#[flowVars.errorDescription]&quot; }"/>
+        <logger level="ERROR" doc:name="Log Error" message="#[payload]"/>
+    </sub-flow>
+</mule>

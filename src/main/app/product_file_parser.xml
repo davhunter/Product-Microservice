@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:file="http://www.mulesoft.org/schema/mule/file" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" 
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd">
+
+    <flow name="product_file_parserFlow">
+        <file:inbound-endpoint path="${file.input.incomingdirectory}" moveToDirectory="${file.input.outgoingdirectory}" responseTimeout="${file.input.responseTimeout}" doc:name="Monitor for File">
+            <file:filename-regex-filter pattern="${file.input.filenameregex}" caseSensitive="false"/>
+        </file:inbound-endpoint>
+        
+        <logger level="INFO" doc:name="Log Flow Start" message="${logging.flowStartMessage}"/>
+        <file:file-to-string-transformer doc:name="Convert File to String"/>
+        <set-payload value="#[payload.split(&quot;\n&quot;)]" doc:name="Split String into Records"/>
+        <foreach collection="#[payload]" doc:name="For Each Record">
+            <set-payload value="#[payload.split(&quot;\\|&quot;)]" doc:name="Split Record into Fields"/>
+            <set-payload value="#[new com.deloitte.productapi.cdm.Product(payload[0], payload[1])]" doc:name="Create CDM Object"/>
+            <flow-ref name="insert_product_in_DB" doc:name="insert_product_in_DB"/>
+        </foreach>
+        <logger level="INFO" doc:name="Log Flow Complete" message="${logging.flowEndMessage}"/>
+    </flow>
+</mule>

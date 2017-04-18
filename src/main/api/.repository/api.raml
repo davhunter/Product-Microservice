@@ -1,0 +1,135 @@
+#%RAML 1.0
+title: Product API
+version: 1.0
+baseUri: http://localhost:8083/product-api  
+
+documentation: 
+  - title: Product API
+    content:  Used for working with **Products**. Products can be retrieved (with various parameters) or created. Only Products can be created through this API, however, not **regions** or **prices**.
+
+types:
+  Products:
+    description: Simple collection of ``Product`` objects. Note that a single product might be included multiple times, when it is associated with multiple regions.
+    type: object
+    properties:
+      products:
+        type: array
+        items: Product
+    
+  Product:
+    description: Contains all properties for a product
+    type: object
+    properties: 
+      ID:
+        description: The unique ID for the product; not required because inserts don't include it
+        type: integer
+        required: false
+      name:
+        description: Product name
+        type: string
+        required: true
+      desc:
+        description: Product description (can be long)
+        type: string
+        required: false
+      region:
+        description: Region for which this product is associated
+        type: string
+        required: false
+      price:
+        description: The price of the product, for a given region
+        type: number
+        required: false
+    example:
+      ID: 1
+      name: "Fancy Schmancy Product"
+      desc: "This is our biggest seller"
+      region: "Canada"
+      price: 123.45
+
+/products:
+  get:
+    description: Returns a list of products matching the given parameters (if any).
+    queryParameters: 
+      IDs:
+        description: Contains a list (comma-separated) of IDs for products. Can be used with or without `priceLessThan` and `priceGreaterThan`.
+        type: string
+        required: false
+      priceLessThan:
+        description: Selects any products where the price is less than the amount specified. Can be used in conjunction with or in isolation from `priceGreaterThan`.
+        type: number
+        required: false
+      priceGreaterThan:
+        description: Selects any products where the price is greater than the amount specified. Can be used in conjunction with or in isolation from `priceLessThan`.
+        type: number
+        required: false
+      region:
+        description: Used to get a filtered list of Products based on region
+        type: string
+        required: false
+    responses: 
+      200:
+        description: Returned when one or more products match the given parameters
+        body: 
+          application/json:
+            type: Products
+      404:
+        description: Returned if no products match the given parameters
+        body: 
+          application/json:
+            type: !include Error.raml
+            example: |
+              { "errorCode": -1, "message": "Invalid list of IDs" }
+  post:
+    description: Used to insert or update a `Product`. The same Product is returned in the response, but with an `ID` populated.
+    body: 
+      application/json:
+        type: Product
+    responses: 
+      201:
+        description: Returned if the product is successfully inserted into the system
+        body: 
+          application/json:
+            type: Product
+      400:
+        description: Returned if incoming data is incorrectly formatted
+        body: 
+          application/json:
+            type: !include Error.raml
+      500:
+        description: Returned if there is system error inserting the product into the system
+        body: 
+          application/json:
+            type: !include Error.raml
+  /{ID}:
+    get:
+      description: Returns all products matching a given ID. Because products can be associated with multiple regions, this API can return multiple products.
+      responses: 
+        200:
+          description: Returned when one or more products are found with this ID
+          body: 
+            application/json:
+              type: Products
+        404:
+          description: Returned when no products are found matching this ID
+          body: 
+            application/json:
+              type: !include Error.raml
+              example: |
+                {"errorCode": -1, "message": "Products not found"}
+    /{region}:
+      description: Gets a single, region-specific product
+      get:
+        responses: 
+          200:
+            description: Returned when the product can be found
+            body: 
+              application/json:
+                type: Product
+          404:
+            description: Returned when the product cannot be found. This could be because no products exist with this ID, or simply because the product with this ID is not associated with any regions.
+            body: 
+              application/json:
+                type: !include Error.raml
+                example: |
+                  { "errorCode": -1, "message": "Product not found" }
